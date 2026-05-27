@@ -1,574 +1,597 @@
-#!/usr/bin/env python3
-"""
-Poker Bot — CustomTkinter UI
-Minimal dark theme · Monte Carlo equity · live advice
-"""
-
+# Import the CustomTkinter library to build a modern-looking dark graphical user interface
 import customtkinter as ctk
+# Import the standard Tkinter library for specialized canvas drawing tools
 import tkinter as tk
+# Import random for shuffling/drawing cards and threading to keep the UI smooth during calculations
 import random, threading
+# Import combinations to calculate all possible 5-card hands from the player's cards
 from itertools import combinations
+# Import Counter to easily tally occurrences of card ranks (detecting pairs, trips, etc.)
 from collections import Counter
 
-# ─── poker engine ─────────────────────────────────────────────────────────────
+# Define all available card ranks ordered from weakest (2) to strongest (Ace)
+CARD_RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
+# Define the four standard card suit identifiers
+CARD_SUITS = ['h','d','c','s']
+# Create a dictionary assignment mapping each rank to a numerical index value (e.g., '2': 0, 'A': 12)
+RANK_VALUE_MAP = {rank: index for index, rank in enumerate(CARD_RANKS)}
+# Map suit letters to clean visual unicode symbols for display inside the application
+SUIT_SYMBOLS = {'h':'♥','d':'♦','c':'♣','s':'♠'}
+# Assign distinct hex colors for display clarity (Red for Hearts/Diamonds, Light Grey for Clubs/Spades)
+SUIT_COLORS = {'h':'#e05555','d':'#e05555','c':'#c8d6e5','s':'#c8d6e5'}
+# Names of official poker hands ordered strictly by standard hand-ranking strength
+POKER_HAND_NAMES = ["High Card", "One Pair", "Two Pair", "Three of a Kind",
+                    "Straight", "Flush", "Full House", "Four of a Kind", "Straight Flush"]
 
-RANKS      = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
-SUITS      = ['h','d','c','s']
-RANK_VAL   = {r: i for i, r in enumerate(RANKS)}
-SUIT_SYM   = {'h':'♥','d':'♦','c':'♣','s':'♠'}
-SUIT_COLOR = {'h':'#e05555','d':'#e05555','c':'#c8d6e5','s':'#c8d6e5'}
-HAND_NAMES = ["High Card","One Pair","Two Pair","Three of a Kind",
-              "Straight","Flush","Full House","Four of a Kind","Straight Flush"]
+def evaluate_five_card_hand(five_card_combination):
 
-def hand_rank(five):
-    ranks = sorted([RANK_VAL[c[0]] for c in five], reverse=True)
-    suits = [c[1] for c in five]
-    cnt   = sorted(Counter(ranks).values(), reverse=True)
-    flush = len(set(suits)) == 1
-    st    = len(set(ranks)) == 5 and ranks[0] - ranks[4] == 4
-    if set(ranks) == {RANK_VAL[r] for r in ['A','2','3','4','5']}: st = True
-    if st and flush:     cat = 8
-    elif cnt[0] == 4:    cat = 7
-    elif cnt == [3,2]:   cat = 6
-    elif flush:          cat = 5
-    elif st:             cat = 4
-    elif cnt[0] == 3:    cat = 3
-    elif cnt[:2]==[2,2]: cat = 2
-    elif cnt[0] == 2:    cat = 1
-    else:                cat = 0
-    return (cat, ranks)
+    card_ranks = sorted([RANK_VALUE_MAP[card[0]] for card in five_card_combination], reverse=True)
+    card_suits = [card[1] for card in five_card_combination]
+    rank_frequencies = sorted(Counter(card_ranks).values(), reverse=True)
+    
+    is_flush = len(set(card_suits)) == 1
+    is_straight = len(set(card_ranks)) == 5 and card_ranks[0] - card_ranks[4] == 4
+    
+    if set(card_ranks) == {RANK_VALUE_MAP[rank] for rank in ['A','2','3','4','5']}: 
+        is_straight = True
+        
+    if is_straight and is_flush:           hand_category = 8
+    elif rank_frequencies[0] == 4:         hand_category = 7
+    elif rank_frequencies == [3, 2]:       hand_category = 6
+    elif is_flush:                         hand_category = 5
+    elif is_straight:                      hand_category = 4
+    elif rank_frequencies[0] == 3:         hand_category = 3
+    elif rank_frequencies[:2] == [2, 2]:   hand_category = 2
+    elif rank_frequencies[0] == 2:         hand_category = 1
+    else:                                  hand_category = 0
+        
+    return (hand_category, card_ranks)
 
-def best_hand(cards):
-    if len(cards) < 5: return None
-    return max(hand_rank(c) for c in combinations(cards, 5))
+def find_best_five_card_hand(all_available_cards):
+    """Finds the strongest possible 5-card combination from a collection of up to 7 cards."""
+    if len(all_available_cards) < 5: return None
+    return max(evaluate_five_card_hand(combination) for combination in combinations(all_available_cards, 5))
 
-def equity(hole, comm, n_opp, sims=2500):
-    deck = [(r,s) for r in RANKS for s in SUITS
-            if (r,s) not in set(hole)|set(comm)]
-    need = 5 - len(comm)
-    wins = ties = 0
-    for _ in range(sims):
-        draw  = random.sample(deck, need + 2*n_opp)
-        board = comm + draw[:need]
-        mine  = best_hand(hole + board)
-        if not mine: continue
-        opps  = [best_hand([draw[need+i*2], draw[need+i*2+1]] + board) for i in range(n_opp)]
-        opps  = [o for o in opps if o]
-        if   not opps:          wins += 1
-        elif mine > max(opps):  wins += 1
-        elif mine == max(opps): ties += 1
-    return 100*wins/sims, 100*ties/sims
+def calculate_win_probability(my_hole_cards, current_community_cards, total_opponents, total_simulations=2500):
+    """Runs a Monte Carlo simulation to calculate win/tie equities against generic opponent hands."""
+    fresh_deck = [(rank, suit) for rank in CARD_RANKS for suit in CARD_SUITS
+                  if (rank, suit) not in set(my_hole_cards) | set(current_community_cards)]
+    needed_community_cards = 5 - len(current_community_cards)
+    win_count = tie_count = 0
+    
+    for _ in range(total_simulations):
+        simulated_draw = random.sample(fresh_deck, max(0, needed_community_cards + 2 * total_opponents))
+        simulated_board = current_community_cards + simulated_draw[:needed_community_cards]
+        my_best_hand = find_best_five_card_hand(my_hole_cards + simulated_board)
+        if not my_best_hand: continue
+            
+        opponents_best_hands = [
+            find_best_five_card_hand([simulated_draw[needed_community_cards + opponent_index * 2], 
+                                      simulated_draw[needed_community_cards + opponent_index * 2 + 1]] + simulated_board) 
+            for opponent_index in range(total_opponents)
+        ]
+        opponents_best_hands = [hand for hand in opponents_best_hands if hand]
+        
+        if not opponents_best_hands:                  win_count += 1
+        elif my_best_hand > max(opponents_best_hands):  win_count += 1
+        elif my_best_hand == max(opponents_best_hands): tie_count += 1
+            
+    return 100 * win_count / total_simulations, 100 * tie_count / total_simulations
 
-def make_advice(win, pot, call):
-    po = pot/(pot+call) if call > 0 else None
-    if win >= 70:                          return "RAISE",       "#4caf7d"
-    if win >= 50:
-        if po and win/100 > po:            return "CALL",        "#4caf7d"
-        return                                    "CALL / RAISE", "#4caf7d"
-    if win >= 30:
-        if po and win/100 > po:            return "CALL",        "#e0a84f"
-        return                                    "FOLD / BLUFF", "#e0a84f"
-    return                                        "FOLD",         "#e05555"
+def generate_strategy_advice(win_percentage, total_pot, cost_to_call):
+    """Compares win percentages to pot odds mathematically to suggest a game action choice."""
+    pot_odds_ratio = total_pot / (total_pot + cost_to_call) if cost_to_call > 0 else None
+    if win_percentage >= 70: return "RAISE", "#4caf7d"
+    if win_percentage >= 50:
+        if pot_odds_ratio and (win_percentage / 100) > pot_odds_ratio: return "CALL", "#4caf7d"
+        return "CALL / RAISE", "#4caf7d"
+    if win_percentage >= 30:
+        if pot_odds_ratio and (win_percentage / 100) > pot_odds_ratio: return "CALL", "#e0a84f"
+        return "FOLD / BLUFF", "#e0a84f"
+    return "FOLD", "#e05555"
 
-# ─── theme ────────────────────────────────────────────────────────────────────
+# ─── UI THEMES AND STYLING DEFINITIONS ────────────────────────────────────────
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
-BG      = "#0d1117"
-PANEL   = "#161b22"
-BORDER  = "#30363d"
-FG      = "#e6edf3"
-FG_DIM  = "#8b949e"
-ACCENT  = "#58a6ff"
-GREEN   = "#4caf7d"
-AMBER   = "#e0a84f"
-RED     = "#e05555"
+COLOR_BACKGROUND = "#0d1117"
+COLOR_PANEL      = "#161b22"
+COLOR_BORDER     = "#30363d"
+COLOR_FOREGROUND = "#e6edf3"
+COLOR_FG_DIMMED  = "#8b949e"
+COLOR_ACCENT     = "#58a6ff"
+COLOR_GREEN      = "#4caf7d"
+COLOR_AMBER      = "#e0a84f"
+COLOR_RED        = "#e05555"
 
-FONT_XS  = ("SF Pro Display", 10)
-FONT_SM  = ("SF Pro Display", 12)
-FONT_MD  = ("SF Pro Display", 14)
-FONT_LG  = ("SF Pro Display", 16, "bold")
-FONT_XL  = ("SF Pro Display", 26, "bold")
-FONT_XXL = ("SF Pro Display", 42, "bold")
+FONT_EXTRA_SMALL = ("SF Pro Display", 10)
+FONT_SMALL       = ("SF Pro Display", 12)
+FONT_MEDIUM      = ("SF Pro Display", 14)
+FONT_LARGE       = ("SF Pro Display", 16, "bold")
+FONT_EXTRA_LARGE = ("SF Pro Display", 26, "bold")
+FONT_MASSIVE     = ("SF Pro Display", 42, "bold")
 
-# ─── root ─────────────────────────────────────────────────────────────────────
+# ─── ROOT WINDOW CONFIGURATION ────────────────────────────────────────────────
 
-root = ctk.CTk()
-root.title("Poker Bot")
-root.geometry("1100x820")
-root.resizable(True, True)
-root.configure(fg_color=BG)
+root_window = ctk.CTk()
+root_window.title("Automated Poker Bot Flow (25 Chips Max)")
+root_window.geometry("1100x820")
+root_window.resizable(True, True)
+root_window.configure(fg_color=COLOR_BACKGROUND)
 
-# ─── state ────────────────────────────────────────────────────────────────────
+# ─── GLOBAL APPLICATION TRACKING STATE ────────────────────────────────────────
 
-hole       = []
-community  = []
-street_idx = 0
-STREETS      = ["Pre-Flop", "Flop", "Turn", "River"]
-STREET_CARDS = [0, 3, 1, 1]
-opp_rows   = []
+my_hole_cards = []
+community_cards = []
+current_street_index = 0
+STREET_NAMES = ["Pre-Flop", "Flop", "Turn", "River"]
+STREET_CARD_THRESHOLDS = [0, 3, 4, 5]
+opponent_ui_rows = []
+dead_pot = 0.0
 
-# ─── helpers ──────────────────────────────────────────────────────────────────
+# ─── HELPER CORE FUNCTIONS ────────────────────────────────────────────────────
 
-def used_cards():
-    return set(hole) | set(community)
+def get_all_used_cards():
+    return set(my_hole_cards) | set(community_cards)
 
-def _lighten(col, delta=20):
-    r,g,b = int(col[1:3],16), int(col[3:5],16), int(col[5:7],16)
-    return f"#{min(255,r+delta):02x}{min(255,g+delta):02x}{min(255,b+delta):02x}"
+def lighten_color(hex_color, brightness_increase=20):
+    red_channel, green_channel, blue_channel = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+    return f"#{min(255, red_channel + brightness_increase):02x}{min(255, green_channel + brightness_increase):02x}{min(255, blue_channel + brightness_increase):02x}"
 
-def _round_rect_pts(x1, y1, x2, y2, r):
-    return [x1+r,y1, x2-r,y1, x2,y1+r, x2,y2-r,
-            x2-r,y2, x1+r,y2, x1,y2-r, x1,y1+r]
+def calculate_rounded_rectangle_points(x1, y1, x2, y2, radius):
+    return [x1 + radius, y1, x2 - radius, y1, x2, y1 + radius, x2, y2 - radius,
+            x2 - radius, y2, x1 + radius, y2, x1, y2 - radius, x1, y1 + radius]
 
-# ─── card tile ────────────────────────────────────────────────────────────────
+def construct_stat_reporting_column(parent_container, column_index, column_header, default_text, standard_color):
+    """Helper method to neatly align quantitative metric outputs inside grid matrices."""
+    ctk.CTkLabel(parent_container, text=column_header, font=FONT_EXTRA_SMALL, text_color=COLOR_FG_DIMMED).grid(row=0, column=column_index, pady=(10, 2))
+    reporting_label = ctk.CTkLabel(parent_container, text=default_text, font=FONT_LARGE, text_color=standard_color)
+    reporting_label.grid(row=1, column=column_index, pady=(0, 10))
+    return reporting_label
 
-def draw_card_tile(parent, value=None, size=(58, 80)):
-    W, H = size
+# ─── CARD WIDGET RENDERER ─────────────────────────────────────────────────────
+
+def draw_card_tile(parent_widget, card_value=None, dimensions=(58, 80)):
+    width_size, height_size = dimensions
     try:
-        bg = parent.cget("fg_color")
-        if isinstance(bg, (list, tuple)): bg = bg[1]
+        background_color = parent_widget.cget("fg_color")
+        if isinstance(background_color, (list, tuple)): background_color = background_color[1]
     except Exception:
-        bg = BG
-    cv = tk.Canvas(parent, width=W, height=H, bg=bg, highlightthickness=0)
-    if value:
-        rank, suit = value
-        fc  = SUIT_COLOR[suit]
-        sym = SUIT_SYM[suit]
-        cv.create_polygon(_round_rect_pts(1,1,W-1,H-1,6), fill=PANEL, outline=fc, smooth=True)
-        cv.create_text(5, 4, text=rank, anchor="nw", font=("SF Pro Display",9,"bold"), fill=fc)
-        cv.create_text(W//2, H//2+4, text=sym, font=("SF Pro Display",20), fill=fc, anchor="center")
+        background_color = COLOR_BACKGROUND
+        
+    card_canvas = tk.Canvas(parent_widget, width=width_size, height=height_size, bg=background_color, highlightthickness=0)
+    
+    if card_value:
+        rank, suit = card_value
+        suit_color = SUIT_COLORS[suit]
+        suit_symbol = SUIT_SYMBOLS[suit]
+        card_canvas.create_polygon(calculate_rounded_rectangle_points(1, 1, width_size - 1, height_size - 1, 6), fill=COLOR_PANEL, outline=suit_color, smooth=True)
+        card_canvas.create_text(5, 4, text=rank, anchor="nw", font=("SF Pro Display", 9, "bold"), fill=suit_color)
+        card_canvas.create_text(width_size // 2, height_size // 2 + 4, text=suit_symbol, font=("SF Pro Display", 20), fill=suit_color, anchor="center")
     else:
-        cv.create_polygon(_round_rect_pts(1,1,W-1,H-1,6), fill=BG, outline=BORDER, smooth=True)
-        cv.create_text(W//2, H//2, text="?", font=("SF Pro Display",18), fill=BORDER, anchor="center")
-    return cv
+        card_canvas.create_polygon(calculate_rounded_rectangle_points(1, 1, width_size - 1, height_size - 1, 6), fill=COLOR_BACKGROUND, outline=COLOR_BORDER, smooth=True)
+        card_canvas.create_text(width_size // 2, height_size // 2, text="?", font=("SF Pro Display", 18), fill=COLOR_BORDER, anchor="center")
+    return card_canvas
 
-# ─── card picker ──────────────────────────────────────────────────────────────
+# ─── MODAL SELECTION CARD PICKER ──────────────────────────────────────────────
 
-def open_picker(title, current, callback, n=1):
-    """
-    Modal card picker. Blocks until the user clicks Confirm.
-    The OS close button is disabled — only Confirm saves the selection.
-    """
-    win = ctk.CTkToplevel(root)
-    win.title(title)
-    win.configure(fg_color=BG)
-    win.geometry("760x520")
-    win.resizable(False, False)
+def open_card_picker_window(window_title, currently_selected, save_callback, number_of_cards_to_select=1):
+    picker_window = ctk.CTkToplevel(root_window)
+    picker_window.title(window_title)
+    picker_window.configure(fg_color=COLOR_BACKGROUND)
+    picker_window.geometry("760x520")
+    picker_window.resizable(False, False)
 
-    # ── Block OS close button — user MUST click Confirm to save ──────────────
-    # Intercept the close event and do nothing, so state is never half-saved.
-    win.protocol("WM_DELETE_WINDOW", lambda: None)
+    picker_window.protocol("WM_DELETE_WINDOW", lambda: None)
+    picker_window.transient(root_window)
+    picker_window.grab_set()
+    picker_window.lift()
+    picker_window.focus_force()
 
-    # Bring to front and keep on top of root
-    win.transient(root)
-    win.grab_set()
-    win.lift()
-    win.focus_force()
+    temporary_selection = list(currently_selected)
+    already_used_cards = get_all_used_cards() - set(currently_selected)
 
-    # local mutable selection list
-    selected = list(current)
-    taken    = used_cards() - set(current)   # cards already on the board/hand
+    ctk.CTkLabel(picker_window, text=window_title, font=FONT_LARGE, text_color=COLOR_FOREGROUND).pack(pady=(18, 2))
+    hint_label = ctk.CTkLabel(picker_window, text=f"Select {number_of_cards_to_select} card{'s' if number_of_cards_to_select > 1 else ''}", font=FONT_SMALL, text_color=COLOR_FG_DIMMED)
+    hint_label.pack()
 
-    # ── header ────────────────────────────────────────────────────────────────
-    ctk.CTkLabel(win, text=title,
-                 font=FONT_LG, text_color=FG).pack(pady=(18,2))
-    hint_lbl = ctk.CTkLabel(win,
-                 text=f"Select {n} card{'s' if n>1 else ''}  ·  click a card to toggle",
-                 font=FONT_SM, text_color=FG_DIM)
-    hint_lbl.pack()
+    preview_frame = ctk.CTkFrame(picker_window, fg_color=COLOR_BACKGROUND)
+    preview_frame.pack(pady=10)
 
-    # ── preview strip ─────────────────────────────────────────────────────────
-    prev_frame = ctk.CTkFrame(win, fg_color=BG)
-    prev_frame.pack(pady=10)
+    def update_preview_display():
+        for child_widget in preview_frame.winfo_children(): child_widget.destroy()
+        for index in range(number_of_cards_to_select):
+            card_value = temporary_selection[index] if index < len(temporary_selection) else None
+            draw_card_tile(preview_frame, card_value, dimensions=(54, 74)).pack(side="left", padx=6)
 
-    def refresh_preview():
-        for w in prev_frame.winfo_children():
-            w.destroy()
-        for i in range(n):
-            v = selected[i] if i < len(selected) else None
-            draw_card_tile(prev_frame, v, size=(54,74)).pack(side="left", padx=6)
+    update_preview_display()
 
-    refresh_preview()
+    outer_grid_frame = ctk.CTkFrame(picker_window, fg_color=COLOR_BACKGROUND)
+    outer_grid_frame.pack(fill="both", expand=True, padx=20, pady=4)
+    inner_grid_frame = tk.Frame(outer_grid_frame, bg=COLOR_BACKGROUND)
+    inner_grid_frame.pack()
 
-    grid_outer = ctk.CTkFrame(win, fg_color=BG)
-    grid_outer.pack(fill="both", expand=True, padx=20, pady=4)
+    def generate_card_grid():
+        for child_widget in inner_grid_frame.winfo_children(): child_widget.destroy()
+        for suit_index, suit_letter in enumerate(CARD_SUITS):
+            for rank_index, rank_letter in enumerate(CARD_RANKS):
+                card_tuple = (rank_letter, suit_letter)
+                is_card_taken = card_tuple in already_used_cards
+                is_card_selected = card_tuple in temporary_selection
 
-    grid_frame = tk.Frame(grid_outer, bg=BG)
-    grid_frame.pack()
+                if is_card_taken:      background_color, text_color, outline_color = "#0a0d12", COLOR_BORDER, COLOR_BORDER
+                elif is_card_selected: background_color, text_color, outline_color = "#1a3050", SUIT_COLORS[suit_letter], COLOR_ACCENT
+                else:                  background_color, text_color, outline_color = "#1a1f2a", SUIT_COLORS[suit_letter], SUIT_COLORS[suit_letter]
 
-    # Build / rebuild the entire grid (called after every toggle)
-    def build_grid():
-        for w in grid_frame.winfo_children():
-            w.destroy()
+                card_cell = tk.Canvas(inner_grid_frame, width=48, height=64, bg=COLOR_BACKGROUND, highlightthickness=0, cursor="" if is_card_taken else "hand2")
+                card_cell.grid(row=suit_index, column=rank_index, padx=2, pady=2)
+                card_cell.create_polygon(calculate_rounded_rectangle_points(1, 1, 47, 63, 5), fill=background_color, outline=outline_color, smooth=True)
+                card_cell.create_text(4, 3, text=rank_letter, anchor="nw", font=("SF Pro Display", 8, "bold"), fill=text_color)
+                card_cell.create_text(24, 38, text=SUIT_SYMBOLS[suit_letter], font=("SF Pro Display", 14), fill=text_color, anchor="center")
 
-        for ci, suit in enumerate(SUITS):
-            for ri, rank in enumerate(RANKS):
-                card    = (rank, suit)
-                is_taken   = card in taken
-                is_selected = card in selected
-
-                if is_taken:
-                    bg_c, fc, ol = "#0a0d12", BORDER, BORDER
-                elif is_selected:
-                    bg_c, fc, ol = "#1a3050", SUIT_COLOR[suit], ACCENT
-                else:
-                    bg_c, fc, ol = "#1a1f2a", SUIT_COLOR[suit], SUIT_COLOR[suit]
-
-                cell = tk.Canvas(grid_frame, width=48, height=64,
-                                 bg=BG, highlightthickness=0,
-                                 cursor="" if is_taken else "hand2")
-                cell.grid(row=ci, column=ri, padx=2, pady=2)
-                cell.create_polygon(_round_rect_pts(1,1,47,63,5),
-                                    fill=bg_c, outline=ol, smooth=True)
-                cell.create_text(4, 3, text=rank, anchor="nw",
-                                 font=("SF Pro Display",8,"bold"), fill=fc)
-                cell.create_text(24, 38, text=SUIT_SYM[suit],
-                                 font=("SF Pro Display",14), fill=fc, anchor="center")
-
-                if not is_taken:
-                    def on_click(c=card):
-                        if c in selected:
-                            selected.remove(c)
-                        elif len(selected) < n:
-                            selected.append(c)
-                        refresh_preview()
-                        build_grid()
-                        # update confirm button state
-                        if len(selected) == n:
-                            confirm_btn.configure(fg_color=ACCENT,
-                                                  hover_color=_lighten(ACCENT),
-                                                  state="normal")
+                if not is_card_taken:
+                    def handle_card_click(clicked_card=card_tuple):
+                        if clicked_card in temporary_selection: temporary_selection.remove(clicked_card)
+                        elif len(temporary_selection) < number_of_cards_to_select: temporary_selection.append(clicked_card)
+                        update_preview_display()
+                        generate_card_grid()
+                        if len(temporary_selection) == number_of_cards_to_select:
+                            confirm_button.configure(fg_color=COLOR_ACCENT, hover_color=lighten_color(COLOR_ACCENT), state="normal")
                         else:
-                            confirm_btn.configure(fg_color=BORDER,
-                                                  hover_color=BORDER,
-                                                  state="disabled")
+                            confirm_button.configure(fg_color=COLOR_BORDER, hover_color=COLOR_BORDER, state="disabled")
+                    card_cell.bind("<Button-1>", lambda event, cb=handle_card_click: cb())
 
-                    cell.bind("<Button-1>", lambda e, f=on_click: f())
+    generate_card_grid()
 
-    build_grid()
+    def process_confirmation():
+        if len(temporary_selection) == number_of_cards_to_select:
+            save_callback(list(temporary_selection))
+            picker_window.grab_release()
+            picker_window.destroy()
 
-    # ── confirm button ────────────────────────────────────────────────────────
-    def confirm():
-        if len(selected) == n:
-            callback(list(selected))   # pass a copy so local list can't mutate
-            win.grab_release()
-            win.destroy()
+    initial_window_state = "normal" if len(temporary_selection) == number_of_cards_to_select else "disabled"
+    initial_window_color = COLOR_ACCENT if len(temporary_selection) == number_of_cards_to_select else COLOR_BORDER
 
-    # Start disabled if nothing pre-selected
-    initial_state  = "normal"  if len(selected) == n else "disabled"
-    initial_color  = ACCENT    if len(selected) == n else BORDER
+    confirm_button = ctk.CTkButton(picker_window, text="Confirm  ✓", command=process_confirmation, font=FONT_MEDIUM, fg_color=initial_window_color, state=initial_window_state)
+    confirm_button.pack(pady=(6, 16))
+    picker_window.wait_window()
 
-    confirm_btn = ctk.CTkButton(
-        win, text=f"Confirm  ✓", command=confirm,
-        font=FONT_MD, fg_color=initial_color,
-        hover_color=_lighten(initial_color),
-        text_color="white", height=44, corner_radius=8,
-        state=initial_state)
-    confirm_btn.pack(pady=(6, 16))
+# ─── CORE LAYOUT ARCHITECTURE SETUP ───────────────────────────────────────────
 
-    # Also add an explicit Cancel that doesn't save anything
-    ctk.CTkButton(
-        win, text="Cancel", command=lambda: [win.grab_release(), win.destroy()],
-        font=FONT_SM, fg_color="transparent", hover_color="#2d1a1a",
-        text_color=FG_DIM, height=28, corner_radius=8).pack(pady=(0, 10))
+top_bar_frame = ctk.CTkFrame(root_window, fg_color=COLOR_BACKGROUND, height=64)
+top_bar_frame.pack(fill="x", padx=30, pady=(20, 0))
+top_bar_frame.pack_propagate(False)
+ctk.CTkLabel(top_bar_frame, text="pokey wokey bot", font=FONT_EXTRA_LARGE, text_color=COLOR_FOREGROUND).pack(side="left", pady=10)
+street_display_label = ctk.CTkLabel(top_bar_frame, text="PRE-FLOP", font=FONT_LARGE, text_color=COLOR_ACCENT)
+street_display_label.pack(side="right", pady=10)
 
-    win.wait_window()   # block until destroyed
+ctk.CTkFrame(root_window, height=1, fg_color=COLOR_BORDER).pack(fill="x")
 
-# ─── main layout ──────────────────────────────────────────────────────────────
+body_wrapper_frame = ctk.CTkFrame(root_window, fg_color=COLOR_BACKGROUND)
+body_wrapper_frame.pack(fill="both", expand=True, padx=30, pady=20)
+body_wrapper_frame.columnconfigure(0, weight=1)
+body_wrapper_frame.columnconfigure(1, weight=1)
 
-# top bar
-topbar = ctk.CTkFrame(root, fg_color=BG, height=64)
-topbar.pack(fill="x", padx=30, pady=(20,0))
-topbar.pack_propagate(False)
-ctk.CTkLabel(topbar, text="♠  POKER BOT", font=FONT_XL, text_color=FG).pack(side="left", pady=10)
-street_lbl = ctk.CTkLabel(topbar, text="PRE-FLOP", font=FONT_LG, text_color=ACCENT)
-street_lbl.pack(side="right", pady=10)
+left_column_frame = ctk.CTkFrame(body_wrapper_frame, fg_color=COLOR_BACKGROUND)
+right_column_frame = ctk.CTkFrame(body_wrapper_frame, fg_color=COLOR_BACKGROUND)
+left_column_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+right_column_frame.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
 
-ctk.CTkFrame(root, height=1, fg_color=BORDER).pack(fill="x")
+def create_ui_section(parent_container, section_title):
+    section_frame = ctk.CTkFrame(parent_container, fg_color=COLOR_PANEL, corner_radius=10)
+    section_frame.pack(fill="x", pady=(0, 14))
+    ctk.CTkLabel(section_frame, text=section_title, font=FONT_EXTRA_SMALL, text_color=COLOR_FG_DIMMED).pack(anchor="w", padx=16, pady=(12, 4))
+    return section_frame
 
-body = ctk.CTkFrame(root, fg_color=BG)
-body.pack(fill="both", expand=True, padx=30, pady=20)
-body.columnconfigure(0, weight=1)
-body.columnconfigure(1, weight=1)
-body.rowconfigure(0, weight=1)
+# ─── LEFT COLUMN INTERACTION COMPONENT MANAGEMENT ─────────────────────────────
 
-left  = ctk.CTkFrame(body, fg_color=BG)
-right = ctk.CTkFrame(body, fg_color=BG)
-left.grid(row=0, column=0, sticky="nsew", padx=(0,12))
-right.grid(row=0, column=1, sticky="nsew", padx=(12,0))
+hole_cards_section = create_ui_section(left_column_frame, "YOUR HAND")
+hole_cards_display_row = ctk.CTkFrame(hole_cards_section, fg_color=COLOR_PANEL)
+hole_cards_display_row.pack(padx=16, pady=(0, 4))
 
-# ─── section helper ────────────────────────────────────────────────────────────
+def refresh_hole_cards_display():
+    for child_widget in hole_cards_display_row.winfo_children(): child_widget.destroy()
+    visible_cards = my_hole_cards if my_hole_cards else [None, None]
+    for card_data in visible_cards[:2]:
+        draw_card_tile(hole_cards_display_row, card_data, dimensions=(64, 88)).pack(side="left", padx=5)
 
-def section(parent, title):
-    f = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=10)
-    f.pack(fill="x", pady=(0,14))
-    ctk.CTkLabel(f, text=title, font=FONT_XS, text_color=FG_DIM).pack(anchor="w", padx=16, pady=(12,4))
-    return f
+def save_and_analyze_hole_cards(selected_cards):
+    global my_hole_cards
+    my_hole_cards = selected_cards
+    refresh_hole_cards_display()
+    enforce_game_flow_rules()
+    start_poker_analysis()
 
-# ─── LEFT ─────────────────────────────────────────────────────────────────────
+pick_hole_cards_button = ctk.CTkButton(
+    hole_cards_section, text="Pick Cards",
+    command=lambda: open_card_picker_window("Your Hole Cards", my_hole_cards, save_and_analyze_hole_cards, 2),
+    font=FONT_SMALL, fg_color=COLOR_ACCENT, hover_color=lighten_color(COLOR_ACCENT), text_color="white", height=36, corner_radius=8
+)
+pick_hole_cards_button.pack(padx=16, pady=(4, 14))
+refresh_hole_cards_display()
 
-# hole cards
-hole_sec = section(left, "YOUR HAND")
-hole_row = ctk.CTkFrame(hole_sec, fg_color=PANEL)
-hole_row.pack(padx=16, pady=(0,4))
+community_section = create_ui_section(left_column_frame, "COMMUNITY CARDS")
+community_cards_display_row = ctk.CTkFrame(community_section, fg_color=COLOR_PANEL)
+community_cards_display_row.pack(padx=16, pady=(0, 4))
 
-def refresh_hole():
-    for w in hole_row.winfo_children(): w.destroy()
-    shown = hole if hole else [None, None]
-    for c in shown[:2]:
-        draw_card_tile(hole_row, c, size=(64, 88)).pack(side="left", padx=5)
+def refresh_community_cards_display():
+    for child_widget in community_cards_display_row.winfo_children(): child_widget.destroy()
+    visible_table_cards = community_cards + [None] * (5 - len(community_cards))
+    for card_data in visible_table_cards:
+        draw_card_tile(community_cards_display_row, card_data, dimensions=(58, 80)).pack(side="left", padx=4)
 
-refresh_hole()
+def handle_deal_community_cards():
+    target_total = STREET_CARD_THRESHOLDS[current_street_index]
+    needed_to_deal = target_total - len(community_cards)
+    if needed_to_deal <= 0: return
 
-def set_hole(cards):
-    global hole
-    hole = cards
-    refresh_hole()
-    run_analysis()
+    def save_and_analyze_community_cards(newly_dealt_cards):
+        global community_cards
+        for single_card in newly_dealt_cards:
+            if single_card not in community_cards:
+                community_cards.append(single_card)
+        refresh_community_cards_display()
+        enforce_game_flow_rules()
+        start_poker_analysis()
 
-ctk.CTkButton(hole_sec, text="Pick Cards",
-    command=lambda: open_picker("Your Hole Cards", hole, set_hole, 2),
-    font=FONT_SM, fg_color=ACCENT, hover_color=_lighten(ACCENT),
-    text_color="white", height=36, corner_radius=8).pack(padx=16, pady=(4,14))
+    open_card_picker_window(f"Deal — {STREET_NAMES[current_street_index]}", [], save_and_analyze_community_cards, needed_to_deal)
 
-# community cards
-comm_sec = section(left, "COMMUNITY CARDS")
-comm_row = ctk.CTkFrame(comm_sec, fg_color=PANEL)
-comm_row.pack(padx=16, pady=(0,4))
+deal_community_button = ctk.CTkButton(
+    community_section, text="Deal Community Cards",
+    command=handle_deal_community_cards, font=FONT_SMALL, fg_color="#1f2d40",
+    hover_color="#2a3d55", text_color=COLOR_ACCENT, height=36, corner_radius=8, border_width=1, border_color=COLOR_ACCENT
+)
+deal_community_button.pack(padx=16, pady=(4, 14))
+refresh_community_cards_display()
 
-def refresh_comm():
-    for w in comm_row.winfo_children(): w.destroy()
-    shown = community + [None] * (5 - len(community))
-    for c in shown:
-        draw_card_tile(comm_row, c, size=(58, 80)).pack(side="left", padx=4)
+bet_info_section = create_ui_section(left_column_frame, "BET INFO (AUTOMATED TRACKING)")
 
-refresh_comm()
+your_bet_variable = ctk.StringVar(value="0")
+pot_size_display_var = ctk.StringVar(value="0")
+amount_to_call_display_var = ctk.StringVar(value="0")
 
-def pick_comm():
-    n = STREET_CARDS[street_idx]
-    if n == 0: return
+your_bet_row = ctk.CTkFrame(bet_info_section, fg_color=COLOR_PANEL)
+your_bet_row.pack(fill="x", padx=16, pady=4)
+ctk.CTkLabel(your_bet_row, text="Your Bet (This Street)", font=FONT_SMALL, text_color=COLOR_FOREGROUND, width=150, anchor="w").pack(side="left")
+your_bet_entry = ctk.CTkEntry(your_bet_row, textvariable=your_bet_variable, width=110, font=FONT_MEDIUM, fg_color="#0d1117", border_color=COLOR_BORDER, text_color=COLOR_FOREGROUND, corner_radius=6)
+your_bet_entry.pack(side="right", pady=6)
+your_bet_variable.trace_add("write", lambda *args: start_poker_analysis())
 
-    def cb(cards):
-        global community
-        if street_idx == 1:
-            community = cards          # flop: set all 3
-        else:
-            for c in cards:            # turn/river: append
-                if c not in community:
-                    community.append(c)
-        refresh_comm()
-        run_analysis()
+for label_text, associated_var, text_color in [("Calculated Pot Size", pot_size_display_var, COLOR_FOREGROUND), ("Amount to Call", amount_to_call_display_var, COLOR_AMBER)]:
+    data_display_row = ctk.CTkFrame(bet_info_section, fg_color=COLOR_PANEL)
+    data_display_row.pack(fill="x", padx=16, pady=4)
+    ctk.CTkLabel(data_display_row, text=label_text, font=FONT_SMALL, text_color=COLOR_FG_DIMMED, width=150, anchor="w").pack(side="left")
+    ctk.CTkLabel(data_display_row, textvariable=associated_var, font=FONT_LARGE, text_color=text_color).pack(side="right", pady=6)
 
-    open_picker(f"Deal — {STREETS[street_idx]}", [], cb, n)
+ctk.CTkFrame(bet_info_section, height=10, fg_color=COLOR_PANEL).pack()
 
-ctk.CTkButton(comm_sec, text="Deal Community Cards",
-    command=pick_comm, font=FONT_SM, fg_color="#1f2d40",
-    hover_color="#2a3d55", text_color=ACCENT, height=36, corner_radius=8,
-    border_width=1, border_color=ACCENT).pack(padx=16, pady=(4,14))
+navigation_button_frame = ctk.CTkFrame(left_column_frame, fg_color=COLOR_BACKGROUND)
+navigation_button_frame.pack(fill="x", pady=(0, 8))
 
-# bet info
-pot_sec  = section(left, "BET INFO")
-pot_var  = ctk.StringVar(value="0")
-call_var = ctk.StringVar(value="0")
-for lbl_txt, var in [("Pot Size", pot_var), ("Amount to Call", call_var)]:
-    row = ctk.CTkFrame(pot_sec, fg_color=PANEL)
-    row.pack(fill="x", padx=16, pady=4)
-    ctk.CTkLabel(row, text=lbl_txt, font=FONT_SM, text_color=FG_DIM,
-                 width=130, anchor="w").pack(side="left")
-    ctk.CTkEntry(row, textvariable=var, width=110, font=FONT_MD,
-                 fg_color="#0d1117", border_color=BORDER, text_color=FG,
-                 corner_radius=6).pack(side="right", pady=6)
-    var.trace_add("write", lambda *a: run_analysis())
-ctk.CTkFrame(pot_sec, height=10, fg_color=PANEL).pack()
-
-# street nav
-nav = ctk.CTkFrame(left, fg_color=BG)
-nav.pack(fill="x", pady=(0,8))
-
-def prev_street():
-    global street_idx
-    if street_idx > 0:
-        street_idx -= 1
-        street_lbl.configure(text=STREETS[street_idx].upper())
-        run_analysis()
-
-def next_street():
-    global street_idx
-    if street_idx < 3:
-        street_idx += 1
-        street_lbl.configure(text=STREETS[street_idx].upper())
-
-def new_hand():
-    global hole, community, street_idx
-    hole = []; community = []; street_idx = 0
-    refresh_hole(); refresh_comm()
-    street_lbl.configure(text="PRE-FLOP")
-    pot_var.set("0"); call_var.set("0")
-    result_lbl.configure(text="—", text_color=FG_DIM)
-    hand_lbl.configure(text="")
-    win_lbl.configure(text="—%")
-    tie_lbl.configure(text="—%")
-    po_lbl.configure(text="—%")
-    bar_canvas.coords(bar_win,  0, 0, 0, 22)
-    bar_canvas.coords(bar_tie, 0, 0, 0, 22)
-    for od in opp_rows:
-        od["move_var"].set("?")
-        od["bet_var"].set("0")
-
-ctk.CTkButton(nav, text="◀ Prev", command=prev_street,
-    font=FONT_SM, fg_color=PANEL, hover_color=BORDER,
-    text_color=FG_DIM, height=36, corner_radius=8, width=90).pack(side="left")
-ctk.CTkButton(nav, text="Next ▶", command=next_street,
-    font=FONT_SM, fg_color=PANEL, hover_color=BORDER,
-    text_color=FG_DIM, height=36, corner_radius=8, width=90).pack(side="left", padx=8)
-ctk.CTkButton(nav, text="New Hand", command=new_hand,
-    font=FONT_SM, fg_color="#2d1a1a", hover_color="#3d2020",
-    text_color=RED, height=36, corner_radius=8, width=100).pack(side="right")
-
-# ─── RIGHT ────────────────────────────────────────────────────────────────────
-
-# analysis
-an_sec = section(right, "ANALYSIS")
-result_lbl = ctk.CTkLabel(an_sec, text="—", font=FONT_XXL, text_color=FG_DIM)
-result_lbl.pack(pady=(8,2))
-hand_lbl = ctk.CTkLabel(an_sec, text="", font=FONT_MD, text_color=FG_DIM)
-hand_lbl.pack(pady=(0,10))
-
-stats_row = ctk.CTkFrame(an_sec, fg_color=PANEL)
-stats_row.pack(fill="x", padx=16, pady=(0,8))
-for i in range(3): stats_row.columnconfigure(i, weight=1)
-
-def stat_col(parent, col, header, val_txt, val_color):
-    ctk.CTkLabel(parent, text=header, font=FONT_XS, text_color=FG_DIM).grid(row=0, column=col, pady=(10,2))
-    lbl = ctk.CTkLabel(parent, text=val_txt, font=FONT_LG, text_color=val_color)
-    lbl.grid(row=1, column=col, pady=(0,10))
-    return lbl
-
-win_lbl = stat_col(stats_row, 0, "WIN",      "—%", GREEN)
-tie_lbl = stat_col(stats_row, 1, "TIE",      "—%", AMBER)
-po_lbl  = stat_col(stats_row, 2, "POT ODDS", "—%", FG_DIM)
-
-BAR_W = 360
-bar_canvas = tk.Canvas(an_sec, width=BAR_W, height=22,
-                        bg=PANEL, highlightthickness=0)
-bar_canvas.pack(padx=16, pady=(0,4))
-bar_canvas.create_rectangle(0, 0, BAR_W, 22, fill="#0d1117", outline="")
-bar_win = bar_canvas.create_rectangle(0, 0, 0, 22, fill=GREEN, outline="")
-bar_tie = bar_canvas.create_rectangle(0, 0, 0, 22, fill=AMBER, outline="")
-ctk.CTkLabel(an_sec, text="█ win   █ tie",
-             font=FONT_XS, text_color=FG_DIM).pack(pady=(0,14))
-
-# opponents
-opp_sec    = section(right, "OPPONENTS")
-opp_scroll = ctk.CTkScrollableFrame(opp_sec, fg_color=PANEL, height=260)
-opp_scroll.pack(fill="x", padx=4, pady=(0,4))
-
-hdr = ctk.CTkFrame(opp_scroll, fg_color=PANEL)
-hdr.pack(fill="x", padx=8, pady=(4,2))
-for txt, w in [("Player",90), ("Move",120), ("Bet",80)]:
-    ctk.CTkLabel(hdr, text=txt, font=FONT_XS, text_color=FG_DIM,
-                 width=w, anchor="w").pack(side="left", padx=4)
-
-MOVES = ["?","fold","check","call","raise","allin"]
-
-def add_opponent(name=None):
-    idx   = len(opp_rows) + 1
-    pname = name or f"Player {idx}"
-    mv    = ctk.StringVar(value="?")
-    bv    = ctk.StringVar(value="0")
-
-    row = ctk.CTkFrame(opp_scroll, fg_color="#0f141c", corner_radius=6)
-    row.pack(fill="x", padx=8, pady=3)
-
-    ctk.CTkLabel(row, text=pname, font=FONT_SM, text_color=FG,
-                 width=90, anchor="w").pack(side="left", padx=8, pady=8)
-
-    ctk.CTkOptionMenu(row, variable=mv, values=MOVES,
-        font=FONT_SM, fg_color="#161b22", button_color=BORDER,
-        button_hover_color=ACCENT, text_color=FG, dropdown_fg_color="#161b22",
-        dropdown_text_color=FG, dropdown_hover_color=BORDER,
-        width=110, command=lambda *a: run_analysis()).pack(side="left", padx=4)
-
-    ctk.CTkEntry(row, textvariable=bv, width=80, font=FONT_SM,
-                 fg_color="#0d1117", border_color=BORDER,
-                 text_color=FG, corner_radius=6).pack(side="left", padx=4)
-    bv.trace_add("write", lambda *a: run_analysis())
-
-    entry_data = {"frame": row, "name": pname, "move_var": mv, "bet_var": bv}
-
-    def remove():
-        opp_rows.remove(entry_data)
-        row.destroy()
-        run_analysis()
-
-    ctk.CTkButton(row, text="✕", command=remove, width=28, height=28,
-                  fg_color="transparent", hover_color="#2d1a1a",
-                  text_color=FG_DIM, font=FONT_SM).pack(side="right", padx=6)
-
-    opp_rows.append(entry_data)
-    return entry_data
-
-btn_row = ctk.CTkFrame(opp_sec, fg_color=PANEL)
-btn_row.pack(fill="x", padx=8, pady=(0,12))
-ctk.CTkButton(btn_row, text="+ Add Player", command=add_opponent,
-    font=FONT_SM, fg_color="transparent", hover_color="#1a2535",
-    text_color=ACCENT, border_width=1, border_color=ACCENT,
-    height=34, corner_radius=8).pack(side="left", padx=8)
-
-for i in range(1, 3):
-    add_opponent(f"Player {i}")
-
-
-
-_busy = False
-
-def run_analysis(*_):
-    global _busy
-    if _busy or len(hole) < 2: return
-    _busy = True
-    result_lbl.configure(text="…", text_color=FG_DIM)
-
-    _hole  = list(hole)
-    _comm  = list(community)
-    _n     = max(1, len(opp_rows))
-    try:    _pot  = float(pot_var.get())
-    except: _pot  = 0
-    try:    _call = float(call_var.get())
-    except: _call = 0
-
-    def worker():
-        global _busy
+def step_to_next_street():
+    global current_street_index, dead_pot
+    try:    user_chips = float(your_bet_variable.get())
+    except: user_chips = 0.0
+        
+    opponents_chips = 0.0
+    for row_data in opponent_ui_rows:
         try:
-            w, t     = equity(_hole, _comm, _n)
-            rec, col = make_advice(w, _pot, _call)
-            po       = (_pot/(_pot+_call)*100) if _call > 0 else None
-            bh       = best_hand(_hole + _comm)
-            hn       = HAND_NAMES[bh[0]] if bh else ""
-            root.after(0, lambda: _update(w, t, po, rec, col, hn))
+            opponents_chips += float(row_data["bet_variable"].get())
+            row_data["bet_variable"].set("0")
+            if row_data["move_variable"].get() != "fold":
+                row_data["move_variable"].set("?")
+        except: pass
+            
+    dead_pot += (user_chips + opponents_chips)
+    your_bet_variable.set("0")
+    
+    if current_street_index < 3:
+        current_street_index += 1
+        street_display_label.configure(text=STREET_NAMES[current_street_index].upper())
+        enforce_game_flow_rules()
+        start_poker_analysis()
+
+def reset_entire_hand_state():
+    global my_hole_cards, community_cards, current_street_index, dead_pot
+    my_hole_cards = []
+    community_cards = []
+    current_street_index = 0
+    dead_pot = 0.0
+    
+    refresh_hole_cards_display()
+    refresh_community_cards_display()
+    street_display_label.configure(text="PRE-FLOP")
+    your_bet_variable.set("0")
+    pot_size_display_var.set("0")
+    amount_to_call_display_var.set("0")
+    
+    advice_result_label.configure(text="—", text_color=COLOR_FG_DIMMED)
+    hand_name_label.configure(text="")
+    win_percentage_label.configure(text="—%")
+    tie_percentage_label.configure(text="—%")
+    pot_odds_label.configure(text="—%")
+    probability_bar_canvas.coords(win_bar_rectangle, 0, 0, 0, 22)
+    probability_bar_canvas.coords(tie_bar_rectangle, 0, 0, 0, 22)
+    
+    for row_data in opponent_ui_rows:
+        row_data["move_variable"].set("?")
+        row_data["bet_variable"].set("0")
+    enforce_game_flow_rules()
+
+next_street_button = ctk.CTkButton(navigation_button_frame, text="Next Street ▶", command=step_to_next_street, font=FONT_SMALL, fg_color=COLOR_PANEL, hover_color=COLOR_BORDER, text_color=COLOR_FOREGROUND, height=36, corner_radius=8, width=120)
+next_street_button.pack(side="left")
+ctk.CTkButton(navigation_button_frame, text="Reset Hand", command=reset_entire_hand_state, font=FONT_SMALL, fg_color="#2d1a1a", hover_color="#3d2020", text_color=COLOR_RED, height=36, corner_radius=8, width=100).pack(side="right")
+
+# ─── RIGHT COLUMN REPORTING AND ANALYTICS ZONE ────────────────────────────────
+
+analysis_section = create_ui_section(right_column_frame, "ANALYSIS")
+advice_result_label = ctk.CTkLabel(analysis_section, text="—", font=FONT_MASSIVE, text_color=COLOR_FG_DIMMED)
+advice_result_label.pack(pady=(8, 2))
+hand_name_label = ctk.CTkLabel(analysis_section, text="", font=FONT_MEDIUM, text_color=COLOR_FG_DIMMED)
+hand_name_label.pack(pady=(0, 10))
+
+statistics_grid_row = ctk.CTkFrame(analysis_section, fg_color=COLOR_PANEL)
+statistics_grid_row.pack(fill="x", padx=16, pady=(0, 8))
+for col_idx in range(3): statistics_grid_row.columnconfigure(col_idx, weight=1)
+
+win_percentage_label = construct_stat_reporting_column(statistics_grid_row, 0, "WIN", "—%", COLOR_GREEN)
+tie_percentage_label = construct_stat_reporting_column(statistics_grid_row, 1, "TIE", "—%", COLOR_AMBER)
+pot_odds_label       = construct_stat_reporting_column(statistics_grid_row, 2, "POT ODDS", "—%", COLOR_FG_DIMMED)
+
+TOTAL_BAR_WIDTH = 360
+probability_bar_canvas = tk.Canvas(analysis_section, width=TOTAL_BAR_WIDTH, height=22, bg=COLOR_PANEL, highlightthickness=0)
+probability_bar_canvas.pack(padx=16, pady=(0, 4))
+probability_bar_canvas.create_rectangle(0, 0, TOTAL_BAR_WIDTH, 22, fill="#0d1117", outline="")
+win_bar_rectangle = probability_bar_canvas.create_rectangle(0, 0, 0, 22, fill=COLOR_GREEN, outline="")
+tie_bar_rectangle = probability_bar_canvas.create_rectangle(0, 0, 0, 22, fill=COLOR_AMBER, outline="")
+ctk.CTkLabel(analysis_section, text="█ win   █ tie", font=FONT_EXTRA_SMALL, text_color=COLOR_FG_DIMMED).pack(pady=(0, 14))
+
+opponents_section = create_ui_section(right_column_frame, "OPPONENTS")
+opponents_scrollable_frame = ctk.CTkScrollableFrame(opponents_section, fg_color=COLOR_PANEL, height=260)
+opponents_scrollable_frame.pack(fill="x", padx=4, pady=(0, 4))
+
+opponents_list_header = ctk.CTkFrame(opponents_scrollable_frame, fg_color=COLOR_PANEL)
+opponents_list_header.pack(fill="x", padx=8, pady=(4, 2))
+for title, w in [("Player", 90), ("Move", 120), ("Bet", 80)]:
+    ctk.CTkLabel(opponents_list_header, text=title, font=FONT_EXTRA_SMALL, text_color=COLOR_FG_DIMMED, width=w, anchor="w").pack(side="left", padx=4)
+
+AVAILABLE_MOVE_OPTIONS = ["?", "fold", "check", "call", "raise", "allin"]
+
+def append_new_opponent_tracking_row(explicit_name=None):
+    assigned_index = len(opponent_ui_rows) + 1
+    player_display_name = explicit_name or f"Player {assigned_index}"
+    move_variable = ctk.StringVar(value="?")
+    bet_variable = ctk.StringVar(value="0")
+
+    row_container_frame = ctk.CTkFrame(opponents_scrollable_frame, fg_color="#0f141c", corner_radius=6)
+    row_container_frame.pack(fill="x", padx=8, pady=3)
+
+    ctk.CTkLabel(row_container_frame, text=player_display_name, font=FONT_SMALL, text_color=COLOR_FOREGROUND, width=90, anchor="w").pack(side="left", padx=8, pady=8)
+
+    ctk.CTkOptionMenu(
+        row_container_frame, variable=move_variable, values=AVAILABLE_MOVE_OPTIONS,
+        font=FONT_SMALL, fg_color="#161b22", button_color=COLOR_BORDER, width=110, command=lambda *args: start_poker_analysis()
+    ).pack(side="left", padx=4)
+
+    bet_entry = ctk.CTkEntry(row_container_frame, textvariable=bet_variable, width=80, font=FONT_SMALL, fg_color="#0d1117", border_color=COLOR_BORDER, text_color=COLOR_FOREGROUND, corner_radius=6)
+    bet_entry.pack(side="left", padx=4)
+    bet_variable.trace_add("write", lambda *args: start_poker_analysis())
+
+    opponent_row_data_dictionary = {"frame": row_container_frame, "name": player_display_name, "move_variable": move_variable, "bet_variable": bet_variable}
+
+    def remove_opponent_from_list():
+        opponent_ui_rows.remove(opponent_row_data_dictionary)
+        row_container_frame.destroy()
+        start_poker_analysis()
+
+    ctk.CTkButton(row_container_frame, text="✕", command=remove_opponent_from_list, width=28, height=28, fg_color="transparent", hover_color="#2d1a1a", text_color=COLOR_FG_DIMMED, font=FONT_SMALL).pack(side="right", padx=6)
+    opponent_ui_rows.append(opponent_row_data_dictionary)
+    return opponent_row_data_dictionary
+
+opponents_action_row = ctk.CTkFrame(opponents_section, fg_color=COLOR_PANEL)
+opponents_action_row.pack(fill="x", padx=8, pady=(0, 12))
+ctk.CTkButton(opponents_action_row, text="+ Add Player", command=append_new_opponent_tracking_row, font=FONT_SMALL, fg_color="transparent", hover_color="#1a2535", text_color=COLOR_ACCENT, border_width=1, border_color=COLOR_ACCENT, height=34, corner_radius=8).pack(side="left", padx=8)
+
+for structural_index in range(1, 3):
+    append_new_opponent_tracking_row(f"Player {structural_index}")
+
+# ─── STATE ENGINE ENFORCEMENT RULES ───────────────────────────────────────────
+
+def enforce_game_flow_rules():
+    target_board_count = STREET_CARD_THRESHOLDS[current_street_index]
+    
+    if current_street_index == 0:
+        pick_hole_cards_button.configure(state="normal", fg_color=COLOR_ACCENT)
+        deal_community_button.configure(state="disabled", border_color=COLOR_BORDER, text_color=COLOR_FG_DIMMED)
+        if len(my_hole_cards) == 2:
+            next_street_button.configure(state="normal", fg_color=COLOR_PANEL)
+        else:
+            next_street_button.configure(state="disabled", fg_color="#11141a")
+    else:
+        pick_hole_cards_button.configure(state="disabled", fg_color=COLOR_BORDER)
+        
+        if len(community_cards) < target_board_count:
+            deal_community_button.configure(state="normal", border_color=COLOR_ACCENT, text_color=COLOR_ACCENT)
+            next_street_button.configure(state="disabled", fg_color="#11141a")
+        else:
+            deal_community_button.configure(state="disabled", border_color=COLOR_BORDER, text_color=COLOR_FG_DIMMED)
+            if current_street_index < 3:
+                next_street_button.configure(state="normal", fg_color=COLOR_PANEL)
+            else:
+                next_street_button.configure(state="disabled", fg_color="#11141a")
+
+# ─── BACKGROUND SIMULATION PROCESSING LOGIC ENGINE ────────────────────────────
+
+is_simulation_running = False
+
+def start_poker_analysis(*_args):
+    global is_simulation_running
+    
+    try:    user_current_bet = float(your_bet_variable.get())
+    except: user_current_bet = 0.0
+
+    opponent_bets_list = []
+    for row_data in opponent_ui_rows:
+        try:
+            if row_data["move_variable"].get() != "fold":
+                opponent_bets_list.append(float(row_data["bet_variable"].get()))
+        except: pass
+
+    if user_current_bet > 25.0: user_current_bet = 25.0; your_bet_variable.set("25")
+
+    current_highest_table_bet = max([user_current_bet] + opponent_bets_list) if ([user_current_bet] + opponent_bets_list) else 0.0
+    auto_calculated_amount_to_call = max(0.0, current_highest_table_bet - user_current_bet)
+    
+    current_street_pot_total = user_current_bet + sum(opponent_bets_list)
+    auto_calculated_total_pot = dead_pot + current_street_pot_total
+
+    pot_size_display_var.set(f"{auto_calculated_total_pot:.0f} chips")
+    amount_to_call_display_var.set(f"{auto_calculated_amount_to_call:.0f} chips")
+
+    if is_simulation_running or len(my_hole_cards) < 2: return
+    is_simulation_running = True
+    advice_result_label.configure(text="…", text_color=COLOR_FG_DIMMED)
+
+    frozen_hole  = list(my_hole_cards)
+    frozen_comm  = list(community_cards)
+    opp_count    = max(1, len([r for r in opponent_ui_rows if r["move_variable"].get() != "fold"]))
+
+    def background_simulation_worker():
+        global is_simulation_running
+        try:
+            win_pct, tie_pct = calculate_win_probability(frozen_hole, frozen_comm, opp_count)
+            advice_text, advice_color = generate_strategy_advice(win_pct, auto_calculated_total_pot, auto_calculated_amount_to_call)
+            pot_odds_pct = (auto_calculated_total_pot / (auto_calculated_total_pot + auto_calculated_amount_to_call) * 100) if auto_calculated_amount_to_call > 0 else None
+            
+            best_attained_combination = find_best_five_card_hand(frozen_hole + frozen_comm)
+            evaluated_hand_name = POKER_HAND_NAMES[best_attained_combination[0]] if best_attained_combination else ""
+            
+            root_window.after(0, lambda: update_ui_with_results(win_pct, tie_pct, pot_odds_pct, advice_text, advice_color, evaluated_hand_name))
         finally:
-            _busy = False
+            is_simulation_running = False
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=background_simulation_worker, daemon=True).start()
 
-def _update(w, t, po, rec, col, hn):
-    win_lbl.configure(text=f"{w:.0f}%", text_color=GREEN)
-    tie_lbl.configure(text=f"{t:.0f}%", text_color=AMBER)
-    po_lbl.configure(text=f"{po:.0f}%" if po else "—", text_color=FG_DIM)
-    result_lbl.configure(text=rec, text_color=col)
-    hand_lbl.configure(text=hn)
-    wx = int(BAR_W * w / 100)
-    tx = int(BAR_W * t / 100)
-    bar_canvas.coords(bar_win,  0, 0, wx,    22)
-    bar_canvas.coords(bar_tie, wx, 0, wx+tx, 22)
+def update_ui_with_results(win_percentage, tie_percentage, pot_odds, advice_text, advice_color, hand_name):
+    win_percentage_label.configure(text=f"{win_percentage:.0f}%", text_color=COLOR_GREEN)
+    tie_percentage_label.configure(text=f"{tie_percentage:.0f}%", text_color=COLOR_AMBER)
+    pot_odds_label.configure(text=f"{pot_odds:.0f}%" if pot_odds else "—", text_color=COLOR_FG_DIMMED)
+    advice_result_label.configure(text=advice_text, text_color=advice_color)
+    hand_name_label.configure(text=hand_name)
+    
+    win_bar_width = int(TOTAL_BAR_WIDTH * win_percentage / 100)
+    tie_bar_width = int(TOTAL_BAR_WIDTH * tie_percentage / 100)
+    probability_bar_canvas.coords(win_bar_rectangle, 0, 0, win_bar_width, 22)
+    probability_bar_canvas.coords(tie_bar_rectangle, win_bar_width, 0, win_bar_width + tie_bar_width, 22)
 
+enforce_game_flow_rules()
 
-ctk.CTkFrame(root, height=1, fg_color=BORDER).pack(fill="x", side="bottom")
-sbar = ctk.CTkFrame(root, fg_color="#0a0d13", height=32)
-sbar.pack(fill="x", side="bottom")
-ctk.CTkLabel(sbar,
-    text="Cards: rank+suit  ·  e.g.  Ah  Kd  10s  Qc  ·  Suits: h=♥  d=♦  c=♣  s=♠",
-    font=FONT_XS, text_color=FG_DIM).pack(pady=7)
+# ─── FOOTER APPLICATION STATUS BAR CONFIGURATION ──────────────────────────────
 
-root.mainloop()
+ctk.CTkFrame(root_window, height=1, fg_color=COLOR_BORDER).pack(fill="x", side="bottom")
+status_bar_frame = ctk.CTkFrame(root_window, fg_color="#0a0d13", height=32)
+status_bar_frame.pack(fill="x", side="bottom")
+ctk.CTkLabel(status_bar_frame, text="Automated Calculations Active  ·  Max Stack 25 Chips Per Player Rule Applied", font=FONT_EXTRA_SMALL, text_color=COLOR_FG_DIMMED).pack(pady=7)
+
+root_window.mainloop()
