@@ -1,30 +1,20 @@
-# Import the CustomTkinter library to build a modern-looking dark graphical user interface
 import customtkinter as ctk
-# Import the standard Tkinter library for specialized canvas drawing tools
 import tkinter as tk
-# Import random for shuffling/drawing cards and threading to keep the UI smooth during calculations
 import random, threading
-# Import combinations to calculate all possible 5-card hands from the player's cards
 from itertools import combinations
-# Import Counter to easily tally occurrences of card ranks (detecting pairs, trips, etc.)
 from collections import Counter
 
-# Define all available card ranks ordered from weakest (2) to strongest (Ace)
+# configuration data constants
 CARD_RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
-# Define the four standard card suit identifiers
 CARD_SUITS = ['h','d','c','s']
-# Create a dictionary assignment mapping each rank to a numerical index value (e.g., '2': 0, 'A': 12)
 RANK_VALUE_MAP = {rank: index for index, rank in enumerate(CARD_RANKS)}
-# Map suit letters to clean visual unicode symbols for display inside the application
 SUIT_SYMBOLS = {'h':'♥','d':'♦','c':'♣','s':'♠'}
-# Assign distinct hex colors for display clarity (Red for Hearts/Diamonds, Light Grey for Clubs/Spades)
 SUIT_COLORS = {'h':'#e05555','d':'#e05555','c':'#c8d6e5','s':'#c8d6e5'}
-# Names of official poker hands ordered strictly by standard hand-ranking strength
 POKER_HAND_NAMES = ["High Card", "One Pair", "Two Pair", "Three of a Kind",
                     "Straight", "Flush", "Full House", "Four of a Kind", "Straight Flush"]
 
+# mathematical evaluation engine
 def evaluate_five_card_hand(five_card_combination):
-
     card_ranks = sorted([RANK_VALUE_MAP[card[0]] for card in five_card_combination], reverse=True)
     card_suits = [card[1] for card in five_card_combination]
     rank_frequencies = sorted(Counter(card_ranks).values(), reverse=True)
@@ -48,12 +38,11 @@ def evaluate_five_card_hand(five_card_combination):
     return (hand_category, card_ranks)
 
 def find_best_five_card_hand(all_available_cards):
-    """Finds the strongest possible 5-card combination from a collection of up to 7 cards."""
     if len(all_available_cards) < 5: return None
     return max(evaluate_five_card_hand(combination) for combination in combinations(all_available_cards, 5))
 
+# simulation computation logic
 def calculate_win_probability(my_hole_cards, current_community_cards, total_opponents, total_simulations=2500):
-    """Runs a Monte Carlo simulation to calculate win/tie equities against generic opponent hands."""
     fresh_deck = [(rank, suit) for rank in CARD_RANKS for suit in CARD_SUITS
                   if (rank, suit) not in set(my_hole_cards) | set(current_community_cards)]
     needed_community_cards = 5 - len(current_community_cards)
@@ -78,8 +67,8 @@ def calculate_win_probability(my_hole_cards, current_community_cards, total_oppo
             
     return 100 * win_count / total_simulations, 100 * tie_count / total_simulations
 
+# game strategy optimization
 def generate_strategy_advice(win_percentage, total_pot, cost_to_call):
-    """Compares win percentages to pot odds mathematically to suggest a game action choice."""
     pot_odds_ratio = total_pot / (total_pot + cost_to_call) if cost_to_call > 0 else None
     if win_percentage >= 70: return "RAISE", "#4caf7d"
     if win_percentage >= 50:
@@ -90,8 +79,7 @@ def generate_strategy_advice(win_percentage, total_pot, cost_to_call):
         return "FOLD / BLUFF", "#e0a84f"
     return "FOLD", "#e05555"
 
-# ─── UI THEMES AND STYLING DEFINITIONS ────────────────────────────────────────
-
+# interface presentation styles
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
@@ -112,16 +100,14 @@ FONT_LARGE       = ("SF Pro Display", 16, "bold")
 FONT_EXTRA_LARGE = ("SF Pro Display", 26, "bold")
 FONT_MASSIVE     = ("SF Pro Display", 42, "bold")
 
-# ─── ROOT WINDOW CONFIGURATION ────────────────────────────────────────────────
-
+# application frame layout
 root_window = ctk.CTk()
 root_window.title("Automated Poker Bot Flow (25 Chips Max)")
 root_window.geometry("1100x820")
 root_window.resizable(True, True)
 root_window.configure(fg_color=COLOR_BACKGROUND)
 
-# ─── GLOBAL APPLICATION TRACKING STATE ────────────────────────────────────────
-
+# execution state tracking
 my_hole_cards = []
 community_cards = []
 current_street_index = 0
@@ -130,8 +116,7 @@ STREET_CARD_THRESHOLDS = [0, 3, 4, 5]
 opponent_ui_rows = []
 dead_pot = 0.0
 
-# ─── HELPER CORE FUNCTIONS ────────────────────────────────────────────────────
-
+# utility mathematical layout helpers
 def get_all_used_cards():
     return set(my_hole_cards) | set(community_cards)
 
@@ -144,14 +129,12 @@ def calculate_rounded_rectangle_points(x1, y1, x2, y2, radius):
             x2 - radius, y2, x1 + radius, y2, x1, y2 - radius, x1, y1 + radius]
 
 def construct_stat_reporting_column(parent_container, column_index, column_header, default_text, standard_color):
-    """Helper method to neatly align quantitative metric outputs inside grid matrices."""
     ctk.CTkLabel(parent_container, text=column_header, font=FONT_EXTRA_SMALL, text_color=COLOR_FG_DIMMED).grid(row=0, column=column_index, pady=(10, 2))
     reporting_label = ctk.CTkLabel(parent_container, text=default_text, font=FONT_LARGE, text_color=standard_color)
     reporting_label.grid(row=1, column=column_index, pady=(0, 10))
     return reporting_label
 
-# ─── CARD WIDGET RENDERER ─────────────────────────────────────────────────────
-
+# vector graphics card rendering
 def draw_card_tile(parent_widget, card_value=None, dimensions=(58, 80)):
     width_size, height_size = dimensions
     try:
@@ -174,8 +157,7 @@ def draw_card_tile(parent_widget, card_value=None, dimensions=(58, 80)):
         card_canvas.create_text(width_size // 2, height_size // 2, text="?", font=("SF Pro Display", 18), fill=COLOR_BORDER, anchor="center")
     return card_canvas
 
-# ─── MODAL SELECTION CARD PICKER ──────────────────────────────────────────────
-
+# interactive card window logic
 def open_card_picker_window(window_title, currently_selected, save_callback, number_of_cards_to_select=1):
     picker_window = ctk.CTkToplevel(root_window)
     picker_window.title(window_title)
@@ -257,8 +239,7 @@ def open_card_picker_window(window_title, currently_selected, save_callback, num
     confirm_button.pack(pady=(6, 16))
     picker_window.wait_window()
 
-# ─── CORE LAYOUT ARCHITECTURE SETUP ───────────────────────────────────────────
-
+# user interface assembly
 top_bar_frame = ctk.CTkFrame(root_window, fg_color=COLOR_BACKGROUND, height=64)
 top_bar_frame.pack(fill="x", padx=30, pady=(20, 0))
 top_bar_frame.pack_propagate(False)
@@ -284,8 +265,7 @@ def create_ui_section(parent_container, section_title):
     ctk.CTkLabel(section_frame, text=section_title, font=FONT_EXTRA_SMALL, text_color=COLOR_FG_DIMMED).pack(anchor="w", padx=16, pady=(12, 4))
     return section_frame
 
-# ─── LEFT COLUMN INTERACTION COMPONENT MANAGEMENT ─────────────────────────────
-
+# player panel generation
 hole_cards_section = create_ui_section(left_column_frame, "YOUR HAND")
 hole_cards_display_row = ctk.CTkFrame(hole_cards_section, fg_color=COLOR_PANEL)
 hole_cards_display_row.pack(padx=16, pady=(0, 4))
@@ -423,8 +403,7 @@ next_street_button = ctk.CTkButton(navigation_button_frame, text="Next Street �
 next_street_button.pack(side="left")
 ctk.CTkButton(navigation_button_frame, text="Reset Hand", command=reset_entire_hand_state, font=FONT_SMALL, fg_color="#2d1a1a", hover_color="#3d2020", text_color=COLOR_RED, height=36, corner_radius=8, width=100).pack(side="right")
 
-# ─── RIGHT COLUMN REPORTING AND ANALYTICS ZONE ────────────────────────────────
-
+# data metrics visualization panels
 analysis_section = create_ui_section(right_column_frame, "ANALYSIS")
 advice_result_label = ctk.CTkLabel(analysis_section, text="—", font=FONT_MASSIVE, text_color=COLOR_FG_DIMMED)
 advice_result_label.pack(pady=(8, 2))
@@ -496,8 +475,7 @@ ctk.CTkButton(opponents_action_row, text="+ Add Player", command=append_new_oppo
 for structural_index in range(1, 3):
     append_new_opponent_tracking_row(f"Player {structural_index}")
 
-# ─── STATE ENGINE ENFORCEMENT RULES ───────────────────────────────────────────
-
+# workflow control logic
 def enforce_game_flow_rules():
     target_board_count = STREET_CARD_THRESHOLDS[current_street_index]
     
@@ -521,8 +499,7 @@ def enforce_game_flow_rules():
             else:
                 next_street_button.configure(state="disabled", fg_color="#11141a")
 
-# ─── BACKGROUND SIMULATION PROCESSING LOGIC ENGINE ────────────────────────────
-
+# math simulation worker threads
 is_simulation_running = False
 
 def start_poker_analysis(*_args):
@@ -587,8 +564,7 @@ def update_ui_with_results(win_percentage, tie_percentage, pot_odds, advice_text
 
 enforce_game_flow_rules()
 
-# ─── FOOTER APPLICATION STATUS BAR CONFIGURATION ──────────────────────────────
-
+# desktop execution entry point
 ctk.CTkFrame(root_window, height=1, fg_color=COLOR_BORDER).pack(fill="x", side="bottom")
 status_bar_frame = ctk.CTkFrame(root_window, fg_color="#0a0d13", height=32)
 status_bar_frame.pack(fill="x", side="bottom")
